@@ -14,7 +14,7 @@ Use an iPhone as an **HTTP proxy with HTTPS CONNECT**, reached from a Mac over U
 - **Diagnostics:** 300 recent events in memory, timestamps/levels/categories, filters, copy/clear, common credential redaction, and connection counting that closes each client once.
 - **Manual IP rotation:** `Rotação do IP → Trocar IP agora` opens your **Rotate IP** Shortcut. Request, completion, and a newly observed public IP are separate states. Duplicate requests and stale callbacks/lookups cannot confirm a new IP. No periodic rotation is scheduled.
 - **Portable USB launcher:** explicitly targets a physical device, reuses only a matching tunnel, diagnoses a stopped app, and cleans up only a tunnel it created.
-- **Repeatable checks:** Swift tests, launcher tests, an unsigned Shortcut source, and a simulator build workflow.
+- **Repeatable checks:** Swift tests, launcher tests, an unsigned Shortcut source, and local simulator build instructions.
 
 The modified iOS interface is currently primarily Portuguese. The upstream Android, Windows, relay and iMessage components are retained for developers; this fork has not revalidated their end-to-end behavior. Direct Tailscale access to the modified iOS listener is intentionally incompatible with its local-only access policy.
 
@@ -78,7 +78,7 @@ xcodebuild -project MobilePhoneProxy.xcodeproj -scheme MobilePhoneProxy \
   -derivedDataPath ../build CODE_SIGNING_ALLOWED=NO build
 ```
 
-Tests and the CI simulator build do not change Airplane Mode or contact a physical phone. [Contributing](CONTRIBUTING.md) · [Changes](CHANGELOG.md).
+Tests and the local simulator build do not change Airplane Mode or contact a physical phone. [Contributing](CONTRIBUTING.md) · [Changes](CHANGELOG.md).
 
 ## License and authorship
 
