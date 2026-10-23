@@ -14,17 +14,25 @@ enum PublicIP {
     private static let host = "api.ipify.org"
     private static let timeout: TimeInterval = 10
 
-    static func fetch(queue: DispatchQueue, completion: @escaping (Result<String, Error>) -> Void) {
+    @discardableResult
+    static func fetch(queue: DispatchQueue, completion: @escaping (Result<String, Error>) -> Void) -> () -> Void {
         let params = NWParameters(tls: NWProtocolTLS.Options(), tcp: NWProtocolTCP.Options())
         params.requiredInterfaceType = .cellular
 
         let conn = NWConnection(host: NWEndpoint.Host(host), port: 443, using: params)
+        let deadline = ContinuousClock.now.advanced(by: .seconds(timeout))
         var finished = false
         let finish: (Result<String, Error>) -> Void = { result in
             guard !finished else { return }
             finished = true
+            conn.stateUpdateHandler = nil
             conn.cancel()
-            completion(result)
+            // A delayed queue can deliver network callbacks before its overdue timer.
+            if case .success = result, ContinuousClock.now >= deadline {
+                completion(.failure(LookupError.timeout))
+            } else {
+                completion(result)
+            }
         }
 
         conn.stateUpdateHandler = { state in
@@ -49,6 +57,7 @@ enum PublicIP {
         }
         conn.start(queue: queue)
         queue.asyncAfter(deadline: .now() + timeout) { finish(.failure(LookupError.timeout)) }
+        return { queue.async { finish(.failure(LookupError.cancelled)) } }
     }
 
     private static func receiveAll(_ conn: NWConnection, accumulated: Data, done: @escaping (Data) -> Void) {
@@ -76,11 +85,12 @@ enum PublicIP {
     }
 
     enum LookupError: LocalizedError {
-        case timeout, badResponse
+        case timeout, badResponse, cancelled
         var errorDescription: String? {
             switch self {
             case .timeout:     return "timed out"
             case .badResponse: return "unexpected response"
+            case .cancelled:   return "cancelled"
             }
         }
     }

@@ -5,6 +5,8 @@ cd "$repo_dir"
 test_dir=$(mktemp -d "${TMPDIR:-/tmp}/mpp-tests.XXXXXX")
 trap 'rm -rf "$test_dir"' EXIT
 swift_dir=ios/MobilePhoneProxy
+xcrun swiftc "$swift_dir/ConnectivityHealth.swift" "$swift_dir/ProxyConnections.swift" tests/ConnectivityTests.swift -o "$test_dir/connectivity"
+"$test_dir/connectivity"
 xcrun swiftc "$swift_dir/IPRotation.swift" tests/RotationTests.swift -o "$test_dir/rotation"
 "$test_dir/rotation"
 xcrun swiftc "$swift_dir/ProxyLog.swift" tests/ProxyLogTests.swift -o "$test_dir/logs"

@@ -13,7 +13,14 @@ final class ProxyServer: ObservableObject {
     @Published var publicIP: String = "—"
     @Published var publicIPCheckedAt: Date?
     @Published var publicIPLastError: String?
-    @Published var isCheckingPublicIP = false
+    @Published private(set) var connectivity = ConnectivityHealth()
+    @Published private(set) var isReconnecting = false
+    var isCheckingPublicIP: Bool { connectivity.isChecking }
+    var connectivityStatus: String { connectivity.status(at: Date().timeIntervalSince1970) }
+    nonisolated let connections = ProxyConnections()
+    private var lifecycle = UUID()
+    private var cancelLookup: (() -> Void)?
+    private var lastInterfaceRefresh = Date.distantPast
     @Published var keepAliveEnabled: Bool {
         didSet {
             UserDefaults.standard.set(keepAliveEnabled, forKey: Self.keepAlivePreferenceKey)
@@ -58,12 +65,62 @@ final class ProxyServer: ObservableObject {
     private var listener: NWListener?
     private let queue = DispatchQueue(label: "proxy.listener", qos: .userInitiated)
     private var ipRefreshTimer: Timer?
-    private var publicIPTimer: Timer?
     private let lookupQueue = DispatchQueue(label: "proxy.publicip")
 
-    func start() {
-        guard listener == nil, let nwPort = NWEndpoint.Port(rawValue: port) else { return }
+    func startIfNeededOnLaunch() {
+        guard connectivity.startOnLaunch(at: Date().timeIntervalSince1970) else { return }
+        startMaintenance()
+        startListener()
+    }
 
+    func start() {
+        guard !connectivity.desiredRunning else { return }
+        connectivity.start(at: Date().timeIntervalSince1970)
+        startMaintenance()
+        startListener()
+    }
+
+    func reconnect() {
+        guard !isReconnecting else { return }
+        isReconnecting = true
+        releaseResources()
+        connectivity.start(at: Date().timeIntervalSince1970)
+        append("Reconectando recursos do MyProxy; conexões atuais encerradas. Dados móveis e IP não são alterados.", category: .network)
+        startMaintenance()
+        startListener()
+    }
+
+    private func startMaintenance() {
+        ipRefreshTimer?.invalidate()
+        ipRefreshTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.maintenanceTick() }
+        }
+    }
+
+    func becameActive() {
+        // Recompute expiry immediately after suspension; never restart a manual Stop.
+        objectWillChange.send()
+        guard connectivity.desiredRunning else { return }
+        maintenanceTick()
+    }
+
+    private func maintenanceTick() {
+        guard connectivity.desiredRunning else { return }
+        objectWillChange.send()
+        let now = Date()
+        if now.timeIntervalSince(lastInterfaceRefresh) >= 5 {
+            lastInterfaceRefresh = now
+            refreshIPs()
+        }
+        guard now.timeIntervalSince1970 >= (connectivity.nextAttemptAt ?? .infinity) else { return }
+        if listener == nil { startListener() }
+        else if isRunning { refreshPublicIP(force: false) }
+    }
+
+    private func startListener() {
+        guard connectivity.desiredRunning, listener == nil,
+              let nwPort = NWEndpoint.Port(rawValue: port) else { return }
+        let generation = lifecycle
         do {
             let params = NWParameters.tcp
             params.allowLocalEndpointReuse = true
@@ -83,6 +140,10 @@ final class ProxyServer: ObservableObject {
                     return
                 }
                 Task { @MainActor in
+                    guard self.lifecycle == generation, self.connectivity.desiredRunning else {
+                        conn.cancel(); return
+                    }
+                    self.connections.register(conn) { conn.cancel() }
                     self.connectionIDs.insert(ObjectIdentifier(conn))
                     self.activeConnections = self.connectionIDs.count
                     HTTPProxyHandler.handle(client: conn, server: self, queue: self.queue)
@@ -92,6 +153,7 @@ final class ProxyServer: ObservableObject {
             listener.stateUpdateHandler = { [weak self] state in
                 guard let self else { return }
                 Task { @MainActor in
+                    guard self.lifecycle == generation, self.connectivity.desiredRunning else { return }
                     switch state {
                     case .ready:
                         self.isRunning = true
@@ -99,18 +161,12 @@ final class ProxyServer: ObservableObject {
                         self.updateKeepAlive()
                         self.append("Proxy HTTP iniciado na porta \(self.port). Entrada restrita a USB/Wi-Fi local.")
                         self.startRelay()
-                        self.ipRefreshTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { _ in
-                            Task { @MainActor in self.refreshIPs() }
-                        }
-                        self.refreshPublicIP()
-                        self.publicIPTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { _ in
-                            Task { @MainActor in self.refreshPublicIP() }
-                        }
+                        self.refreshPublicIP(force: false)
                     case .failed(let err):
                         self.append("Falha ao receber conexões: \(err)", level: .error)
-                        self.stop()
+                        self.listenerFailed()
                     case .cancelled:
-                        self.isRunning = false
+                        self.listenerFailed()
                     default:
                         break
                     }
@@ -118,20 +174,45 @@ final class ProxyServer: ObservableObject {
             }
 
             listener.start(queue: queue)
+            // A listener stuck waiting must not suppress recovery indefinitely.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self] in
+                guard let self, self.lifecycle == generation, !self.isRunning,
+                      self.connectivity.desiredRunning else { return }
+                self.listenerFailed()
+            }
         } catch {
             append("Não foi possível iniciar: \(error)", level: .error)
+            listenerFailed()
         }
     }
 
+    private func listenerFailed() {
+        releaseResources()
+        connectivity.listenerFailed(at: Date().timeIntervalSince1970)
+        isReconnecting = false
+        startMaintenance()
+        append("Listener indisponível; nova tentativa automática agendada.", level: .warning, category: .network)
+    }
+
     func stop() {
+        connectivity.stop()
+        isReconnecting = false
+        releaseResources()
+    }
+
+    private func releaseResources() {
         let wasStarted = listener != nil
+        lifecycle = UUID()
+        cancelLookup?()
+        cancelLookup = nil
         listener?.cancel()
         listener = nil
         isRunning = false
         ipRefreshTimer?.invalidate()
         ipRefreshTimer = nil
-        publicIPTimer?.invalidate()
-        publicIPTimer = nil
+        connections.closeAll()
+        connectionIDs.removeAll()
+        activeConnections = 0
         keepAlive.stop()
         relay.stop()
         if wasStarted { append("Proxy parado; novas conexões não serão aceitas.") }
@@ -157,6 +238,7 @@ final class ProxyServer: ObservableObject {
         Task { @MainActor in self.bytesDown &+= UInt64(n) }
     }
     nonisolated func connectionClosed(_ client: NWConnection) {
+        connections.close(client)
         let id = ObjectIdentifier(client)
         Task { @MainActor in
             guard self.connectionIDs.remove(id) != nil else { return }
@@ -251,6 +333,11 @@ final class ProxyServer: ObservableObject {
             "paired": RotateAuth.isPaired,
             "build": Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?",
             "isRunning": isRunning,
+            "listenerState": isRunning ? "listening" : connectivity.desiredRunning ? "recovering" : "stopped",
+            "cellularHealth": connectivityStatus,
+            "cellularHealthValiditySeconds": ConnectivityHealth.validity,
+            "reconnecting": isReconnecting,
+            "desiredRunning": connectivity.desiredRunning,
             "port": port,
             "activeConnections": activeConnections,
             "keepAliveEnabled": keepAliveEnabled,
@@ -263,6 +350,12 @@ final class ProxyServer: ObservableObject {
             "automaticRotationScheduled": false,
             "usbTunnelStatus": "not-observable-from-iphone",
         ]
+        if let at = connectivity.lastAttemptAt { d["cellularHealthAttemptAt"] = ISO8601DateFormatter().string(from: Date(timeIntervalSince1970: at)) }
+        if let at = connectivity.lastSuccessAt {
+            d["cellularHealthCheckedAt"] = ISO8601DateFormatter().string(from: Date(timeIntervalSince1970: at))
+            d["cellularHealthAgeSeconds"] = max(0, Date().timeIntervalSince1970 - at)
+        }
+        if let at = connectivity.nextAttemptAt { d["nextConnectivityAttemptAt"] = ISO8601DateFormatter().string(from: Date(timeIntervalSince1970: at)) }
         if let error = publicIPLastError { d["publicIPLastError"] = error }
         if let at = publicIPCheckedAt { d["publicIPCheckedAt"] = ISO8601DateFormatter().string(from: at) }
         if let last = lastRotateCommand { d["lastRotateCommand"] = last }
@@ -431,15 +524,21 @@ final class ProxyServer: ObservableObject {
     }
 
     /// Asks an external service for the public (post-CGNAT) address over cellular.
-    func refreshPublicIP() {
-        guard !isCheckingPublicIP else { return }
-        isCheckingPublicIP = true
+    func refreshPublicIP(force: Bool = true) {
+        guard isRunning, let attempt = connectivity.begin(at: Date().timeIntervalSince1970, force: force) else { return }
+        let generation = lifecycle
         let lookupStartedAt = Date()
-        PublicIP.fetch(queue: lookupQueue) { [weak self] result in
+        cancelLookup = PublicIP.fetch(queue: lookupQueue) { [weak self] result in
             Task { @MainActor in
-                guard let self else { return }
-                self.isCheckingPublicIP = false
-                switch result {
+                guard let self, self.lifecycle == generation else { return }
+                let success: Bool
+                if case .success = result { success = true } else { success = false }
+                guard self.connectivity.complete(attempt, success: success, at: Date().timeIntervalSince1970) else { return }
+                self.cancelLookup = nil
+                self.isReconnecting = false
+                let currentResult: Result<String, Error> = success && self.connectivityStatus != "confirmed"
+                    ? .failure(PublicIP.LookupError.timeout) : result
+                switch currentResult {
                 case .success(let ip):
                     if self.lastPublicIPFailure != nil {
                         self.append("Consulta do IP móvel voltou a responder.", category: .network)
@@ -450,7 +549,7 @@ final class ProxyServer: ObservableObject {
                         self.append(self.publicIP == "—" ? "IP público móvel consultado: \(ip)." : "Mudança de IP móvel observada: \(self.publicIP) → \(ip).", category: .network)
                         self.publicIP = ip
                     }
-                    self.publicIPCheckedAt = Date()
+                    self.publicIPCheckedAt = lookupStartedAt
                     let previousPhase = self.rotation.phase
                     self.rotation.observe(ip, lookupStartedAt: lookupStartedAt)
                     if self.rotation.phase != previousPhase {

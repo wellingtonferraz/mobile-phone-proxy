@@ -211,13 +211,17 @@ enum HTTPProxyHandler {
                                      client: NWConnection,
                                      server: ProxyServer,
                                      queue: DispatchQueue,
-                                     forceCellular: Bool) {
+                                     forceCellular: Bool,
+                                     deadline: DispatchTime = .now() + 15) {
         let upstream = NWConnection(host: NWEndpoint.Host(req.host), port: nwPort,
                                     using: makeOutboundParams(forceCellular: forceCellular))
+        guard server.connections.attach(upstream, to: client, cancel: { upstream.cancel() }) else { return }
 
         upstream.stateUpdateHandler = { state in
+            guard server.connections.isCurrent(client, upstream: upstream) else { return }
             switch state {
             case .ready:
+                server.connections.markForwarding(client, upstream: upstream)
                 let route: String
                 if upstream.currentPath?.usesInterfaceType(.cellular) == true { route = "rede móvel" }
                 else if upstream.currentPath?.usesInterfaceType(.wifi) == true { route = "Wi-Fi" }
@@ -248,7 +252,7 @@ enum HTTPProxyHandler {
                 }
             case .failed(let err):
                 #if !targetEnvironment(simulator)
-                if forceCellular {
+                if forceCellular && server.connections.canRetry(client, upstream: upstream) {
                     // Android-parity fallback (mirrors the bindSocket→default-route
                     // recovery in the Kotlin port, commit a1cec3d). iOS can deny a
                     // cellular-pinned socket by system policy ("path unsatisfied").
@@ -258,7 +262,7 @@ enum HTTPProxyHandler {
                     server.logLine("Falha na saída móvel para \(req.diagnosticHost): \(err). Tentando a rota padrão, que pode usar Wi-Fi.", level: .warning, category: .network)
                     upstream.cancel()
                     openUpstream(req: req, nwPort: nwPort, leftover: leftover,
-                                 client: client, server: server, queue: queue, forceCellular: false)
+                                 client: client, server: server, queue: queue, forceCellular: false, deadline: deadline)
                     return
                 }
                 #endif
@@ -274,6 +278,10 @@ enum HTTPProxyHandler {
         }
 
         upstream.start(queue: queue)
+        queue.asyncAfter(deadline: deadline) {
+            guard server.connections.canRetry(client, upstream: upstream) else { return }
+            sendErrorAndClose(client, status: "504 Gateway Timeout", server: server, upstream: upstream)
+        }
     }
 
     private static func rebuildRequest(_ req: ParsedRequest) -> String {

@@ -16,6 +16,7 @@ Use an iPhone as an **HTTP proxy with HTTPS CONNECT**, reached from a Mac over U
 - **Local access policy:** IPv4 loopback or the current private Wi-Fi subnet only; rejects inbound cellular/other interfaces and IPv6. This policy applies to the iOS app, not the inherited Android/Windows apps.
 - **Clear connection instructions:** current Wi-Fi address in the app; separate USB instructions for `127.0.0.1:8889` on the Mac running the tunnel.
 - **Diagnostics:** 300 recent events in memory, timestamps/levels/categories, filters, copy/clear, common credential redaction, and connection counting that closes each client once.
+- **Connectivity and reconnect:** recent cellular HTTPS evidence, automatic checks with bounded retries, and a button to restart MyProxy's own connections and listener. [Behavior and limits](docs/CONNECTIVITY.md) · [Build 13 validation](docs/CONNECTIVITY-QA.md).
 - **Manual IP rotation:** `Rotação do IP → Trocar IP agora` opens your **Rotate IP** Shortcut. Request, completion, and a newly observed public IP are separate states. Duplicate requests and stale callbacks/lookups cannot confirm a new IP. No periodic rotation is scheduled.
 - **Portable USB launcher:** explicitly targets a physical device, reuses only a matching tunnel, diagnoses a stopped app, and cleans up only a tunnel it created.
 - **Repeatable checks:** Swift tests, launcher tests, an unsigned Shortcut source, and local simulator build instructions.

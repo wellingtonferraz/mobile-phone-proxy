@@ -17,20 +17,36 @@ struct ContentView: View {
         }
     }
 
+    private var healthLabel: String {
+        switch server.connectivityStatus {
+        case "confirmed": return "Confirmada por HTTPS"
+        case "checking": return "Verificando…"
+        case "stopped": return "Sem verificação (proxy parado)"
+        default: return "Sem confirmação recente"
+        }
+    }
+
     var body: some View {
         NavigationStack {
             Form {
                 Section("Status") {
                     HStack {
                         Circle()
-                            .fill(server.isRunning ? .green : .gray)
+                            .fill(server.connectivityStatus == "confirmed" ? .green : server.connectivity.desiredRunning ? .orange : .gray)
                             .frame(width: 10, height: 10)
-                        Text(server.isRunning ? "Em execução" : "Parado")
+                        Text(server.isRunning ? "Proxy escutando" : server.connectivity.desiredRunning ? "Recuperando proxy" : "Proxy parado")
                             .font(.headline)
                         Spacer()
                         Text("\(server.activeConnections) conexões")
                             .foregroundStyle(.secondary)
                             .monospacedDigit()
+                    }
+                    LabeledContent("Internet móvel", value: healthLabel)
+                    Text("Confirmação HTTPS celular válida por 45 s. Não confirma o túnel USB nem todos os destinos.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    if let at = server.connectivity.nextAttemptAt, server.connectivity.desiredRunning {
+                        Text("Próxima verificação: \(Date(timeIntervalSince1970: at).formatted(date: .omitted, time: .standard))")
+                            .font(.caption2).foregroundStyle(.secondary)
                     }
                     LabeledContent("IP Wi-Fi do iPhone", value: server.localIP)
                     LabeledContent("IP interno da operadora", value: server.cellularIP)
@@ -39,7 +55,7 @@ struct ContentView: View {
                             if server.isCheckingPublicIP { ProgressView().controlSize(.mini) }
                             // With no cellular address the last public IP is
                             // stale (e.g. mid airplane-mode rotation).
-                            if (server.cellularIP == "—" || server.publicIPLastError != nil) && server.publicIP != "—" {
+                            if server.connectivityStatus != "confirmed" && server.publicIP != "—" {
                                 Text("último: \(server.publicIP)")
                                     .foregroundStyle(.secondary)
                             } else {
@@ -78,13 +94,13 @@ struct ContentView: View {
                             .disabled(server.isRunning)
                             .frame(width: 100)
                     }
-                    if server.isRunning {
+                    if server.connectivity.desiredRunning {
                         Button {
                             server.refreshPublicIP()
                         } label: {
-                            Label("Check public IP now", systemImage: "arrow.clockwise")
+                            Label("Verificar internet agora", systemImage: "arrow.clockwise")
                         }
-                        .disabled(server.isCheckingPublicIP)
+                        .disabled(server.isCheckingPublicIP || !server.isRunning)
                         Button(role: .destructive) {
                             server.stop()
                         } label: {
@@ -99,10 +115,19 @@ struct ContentView: View {
                         }
                     }
 
+                    Button {
+                        server.reconnect()
+                    } label: {
+                        Label(server.isReconnecting ? "Reconectando…" : "Reconectar proxy", systemImage: "arrow.triangle.2.circlepath")
+                    }
+                    .disabled(server.isReconnecting)
+                    Text("Reinicia somente o MyProxy e encerra suas conexões atuais. Não desliga dados móveis, não usa modo avião e não força outro IP. Se parado, inicia o proxy.")
+                        .font(.caption).foregroundStyle(.secondary)
+
                     Toggle(isOn: $server.keepAliveEnabled) {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Keep alive in background (audio)")
-                            Text("Plays silent audio so the proxy survives screen-lock. Costs battery; may pause on a call.")
+                            Text("Tenta manter o app ativo com áudio silencioso. Consome bateria; o iOS pode suspender ou interromper o serviço.")
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
                         }

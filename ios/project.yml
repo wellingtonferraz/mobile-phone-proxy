@@ -63,6 +63,6 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.example.mobilephoneproxy
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         MARKETING_VERSION: "1.1"
-        CURRENT_PROJECT_VERSION: "12"
+        CURRENT_PROJECT_VERSION: "13"
         MPP_RELAY_PHONE_ID: iphone
         INFOPLIST_KEY_UILaunchScreen_Generation: "YES"
