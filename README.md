@@ -1,10 +1,10 @@
-# iProxy — iPhone proxy over USB and Wi-Fi
+# MyProxy — iPhone proxy over USB and Wi-Fi
 
-<img src="ios/MobilePhoneProxy/Assets.xcassets/AppIcon.appiconset/AppIcon.png" width="128" height="128" alt="iProxy app icon">
+<img src="ios/MobilePhoneProxy/Assets.xcassets/AppIcon.appiconset/AppIcon.png" width="128" height="128" alt="MyProxy app icon">
 
 An open-source fork of **[Mobile Phone Proxy by Matija Stepanic (@stepanic)](https://github.com/stepanic/mobile-phone-proxy)**, with iPhone usability, local-network access controls, diagnostics, and USB tooling contributed by **Wellington Ferraz**. The original project and Git history are preserved under the [MIT license](LICENSE). See [credits](CREDITS.md).
 
-The iOS app appears as **iProxy** on your Home Screen and inside the app. The repository remains `mobile-phone-proxy`, the Xcode target remains `MobilePhoneProxy`, and technical identifiers are unchanged for build and upgrade compatibility. [Icon source and generation notes](docs/BRANDING.md).
+The iOS app appears as **MyProxy** on your Home Screen and inside the app. The repository remains `mobile-phone-proxy`, the Xcode target remains `MobilePhoneProxy`, and technical identifiers are unchanged for build and upgrade compatibility. [Icon source and generation notes](docs/BRANDING.md).
 
 Use an iPhone as an **HTTP proxy with HTTPS CONNECT**, reached from a Mac over USB or from a computer on the same private Wi-Fi subnet. Outbound connections try cellular first; the inherited fallback can use the default route, including Wi-Fi. This is not a VPN or a guarantee of cellular-only egress.
 

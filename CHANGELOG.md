@@ -1,5 +1,10 @@
 # Fork changes
 
+## 1.1 — build 12
+
+- Rename the iOS display name and in-app title to MyProxy at the owner's request. Keep existing app data and technical identifiers.
+- Replace the initial icon with Polvo Hub, a pixel-art octopus with a Wi-Fi signal in ivory, lavender and lime green.
+
 ## 2026-10-23 — iProxy name and app icon (build 10)
 
 - Name the installed iOS app and its main screen **iProxy**.

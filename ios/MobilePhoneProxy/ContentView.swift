@@ -220,7 +220,7 @@ struct ContentView: View {
                     .frame(height: 320)
                 }
             }
-            .navigationTitle("iProxy")
+            .navigationTitle("MyProxy")
             .sheet(isPresented: $showRotationSetup) {
                 NavigationStack {
                     Form {
@@ -240,7 +240,7 @@ struct ContentView: View {
                             Text("Salve sem executar. O intervalo é ajustável; não garante outro IP na sua operadora.").font(.caption)
                         }
                         Section("Para usar") {
-                            Text("Com o proxy iniciado e o Acesso Guiado desligado, toque em Trocar IP agora. Mantenha Atalhos aberto até terminar e permita o retorno ao iProxy, se o iOS pedir.")
+                            Text("Com o proxy iniciado e o Acesso Guiado desligado, toque em Trocar IP agora. Mantenha Atalhos aberto até terminar e permita o retorno ao MyProxy, se o iOS pedir.")
                             Text("Se interromper o atalho, confira se o modo avião ficou desligado. A instalação só pode ser confirmada no app Atalhos; este app não lê sua biblioteca.")
                                 .font(.caption).foregroundStyle(.secondary)
                         }

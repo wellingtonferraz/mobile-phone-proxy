@@ -1,8 +1,8 @@
-# Install iProxy on iPhone (Mac + Xcode)
+# Install MyProxy on iPhone (Mac + Xcode)
 
 [Português](INSTALACAO-PT-BR.md) · [Project and original-author credits](../README.md)
 
-The installed iOS app is named **iProxy**, with its own app icon. The Xcode project/target and compiled `.app` filename remain `MobilePhoneProxy`; use the commands below unchanged.
+The installed iOS app is named **MyProxy**, with its own app icon. The Xcode project/target and compiled `.app` filename remain `MobilePhoneProxy`; use the commands below unchanged.
 
 This guide builds **your own signed copy**. GitHub hosts the source; it does not grant an Apple signing identity or install an IPA on any phone.
 

@@ -21,7 +21,7 @@ targets:
     info:
       path: MobilePhoneProxy/Info.plist
       properties:
-        CFBundleDisplayName: iProxy
+        CFBundleDisplayName: MyProxy
         # iOS re-indexes App Intents (Shortcuts actions) only when the build
         # number changes — bump CURRENT_PROJECT_VERSION for every device build.
         CFBundleShortVersionString: $(MARKETING_VERSION)
@@ -63,6 +63,6 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.example.mobilephoneproxy
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         MARKETING_VERSION: "1.1"
-        CURRENT_PROJECT_VERSION: "10"
+        CURRENT_PROJECT_VERSION: "12"
         MPP_RELAY_PHONE_ID: iphone
         INFOPLIST_KEY_UILaunchScreen_Generation: "YES"

@@ -1,6 +1,6 @@
-# Instalação do iProxy no iPhone e no Mac
+# Instalação do MyProxy no iPhone e no Mac
 
-O app instalado aparece como **iProxy**, com ícone próprio. O projeto/target do Xcode e o arquivo compilado `.app` continuam chamados `MobilePhoneProxy`; os comandos deste guia usam esses nomes técnicos.
+O app instalado aparece como **MyProxy**, com ícone próprio. O projeto/target do Xcode e o arquivo compilado `.app` continuam chamados `MobilePhoneProxy`; os comandos deste guia usam esses nomes técnicos.
 
 Este é um fork do [Mobile Phone Proxy](https://github.com/stepanic/mobile-phone-proxy), criado por **Matija Stepanic (@stepanic)**. As melhorias deste fork são mantidas por Wellington Ferraz. O projeto continua sob a [licença MIT](../LICENSE); veja os [créditos](../CREDITS.md).
 
