@@ -17,7 +17,7 @@ enum HTTPProxyHandler {
                                     accumulated: Data) {
         client.receive(minimumIncompleteLength: 1, maximumLength: 16 * 1024) { data, _, isEOF, error in
             if let error = error {
-                server.logLine("client recv error: \(error)")
+                logTransportError(error, operation: "Leitura do cliente", server: server)
                 close(client, server: server)
                 return
             }
@@ -59,6 +59,11 @@ enum HTTPProxyHandler {
         var host: String
         var port: UInt16
         var isConnect: Bool { method.uppercased() == "CONNECT" }
+        var diagnosticHost: String { ProxyLogEntry.diagnosticHost(host) }
+        var diagnosticMethod: String {
+            let value = method.uppercased()
+            return ["CONNECT", "GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "TRACE"].contains(value) ? value : "(método não reconhecido)"
+        }
     }
 
     private static func parseRequest(_ data: Data) -> ParsedRequest? {
@@ -156,7 +161,7 @@ enum HTTPProxyHandler {
             return
         }
 
-        server.logLine("\(req.method) \(req.host):\(req.port)")
+        server.logLine("Requisição \(req.diagnosticMethod) para \(req.diagnosticHost):\(req.port).", level: .debug)
 
         guard let nwPort = NWEndpoint.Port(rawValue: req.port) else {
             sendErrorAndClose(client, status: "400 Bad Request", server: server)
@@ -176,7 +181,7 @@ enum HTTPProxyHandler {
             out.append(body)
             client.send(content: out, isComplete: true, completion: .contentProcessed { _ in
                 client.cancel()
-                server.connectionClosed()
+                server.connectionClosed(client)
             })
         }
     }
@@ -213,11 +218,16 @@ enum HTTPProxyHandler {
         upstream.stateUpdateHandler = { state in
             switch state {
             case .ready:
+                let route: String
+                if upstream.currentPath?.usesInterfaceType(.cellular) == true { route = "rede móvel" }
+                else if upstream.currentPath?.usesInterfaceType(.wifi) == true { route = "Wi-Fi" }
+                else { route = "rota do sistema" }
+                server.logLine("Conectado a \(req.diagnosticHost):\(req.port) pela \(route).", level: .debug)
                 if req.isConnect {
                     let resp = "HTTP/1.1 200 Connection Established\r\nProxy-Agent: MobilePhoneProxy\r\n\r\n"
                     client.send(content: Data(resp.utf8), completion: .contentProcessed { err in
                         if let err = err {
-                            server.logLine("client write err: \(err)")
+                            logTransportError(err, operation: "Resposta ao cliente", server: server)
                             close(client, upstream: upstream, server: server)
                             return
                         }
@@ -229,7 +239,7 @@ enum HTTPProxyHandler {
                     initial.append(leftover)
                     upstream.send(content: initial, completion: .contentProcessed { err in
                         if let err = err {
-                            server.logLine("upstream write err: \(err)")
+                            logTransportError(err, operation: "Envio ao destino \(req.diagnosticHost)", server: server)
                             close(client, upstream: upstream, server: server)
                             return
                         }
@@ -245,15 +255,17 @@ enum HTTPProxyHandler {
                     // Retry once on the default route. This egresses via cellular
                     // ONLY IF WiFi is OFF (then the default route is pdp_ip0). With
                     // WiFi ON it would leak the WiFi/home IP — hence the loud log.
-                    server.logLine("⚠️ CELLULAR PATH FAILED (\(err)) — retrying on DEFAULT route. Egress is cellular ONLY if WiFi is OFF.")
+                    server.logLine("Falha na saída móvel para \(req.diagnosticHost): \(err). Tentando a rota padrão, que pode usar Wi-Fi.", level: .warning, category: .network)
                     upstream.cancel()
                     openUpstream(req: req, nwPort: nwPort, leftover: leftover,
                                  client: client, server: server, queue: queue, forceCellular: false)
                     return
                 }
                 #endif
-                server.logLine("upstream failed (\(req.host)): \(err)")
+                server.logLine("Destino \(req.diagnosticHost) indisponível: \(err). Resposta HTTP 502.", level: .error)
                 sendErrorAndClose(client, status: "502 Bad Gateway", server: server, upstream: upstream)
+            case .waiting(let err):
+                server.logLine("Aguardando rota até \(req.diagnosticHost): \(err).", level: .warning, category: .network)
             case .cancelled:
                 break
             default:
@@ -289,18 +301,20 @@ enum HTTPProxyHandler {
     }
 
     private static func startRelay(client: NWConnection, upstream: NWConnection, server: ProxyServer) {
-        pump(from: client, to: upstream, server: server, isClientToUpstream: true)
-        pump(from: upstream, to: client, server: server, isClientToUpstream: false)
+        pump(from: client, to: upstream, client: client, upstream: upstream, server: server, isClientToUpstream: true)
+        pump(from: upstream, to: client, client: client, upstream: upstream, server: server, isClientToUpstream: false)
     }
 
     private static func pump(from: NWConnection,
                              to: NWConnection,
+                             client: NWConnection,
+                             upstream: NWConnection,
                              server: ProxyServer,
                              isClientToUpstream: Bool) {
         from.receive(minimumIncompleteLength: 1, maximumLength: 32 * 1024) { data, _, isEOF, error in
             if let error = error {
-                server.logLine("relay recv err: \(error)")
-                close(from, upstream: to, server: server)
+                logTransportError(error, operation: isClientToUpstream ? "Leitura do cliente" : "Leitura do destino", server: server)
+                close(client, upstream: upstream, server: server)
                 return
             }
             if let data = data, !data.isEmpty {
@@ -308,41 +322,46 @@ enum HTTPProxyHandler {
                 else { server.recordDown(data.count) }
                 to.send(content: data, completion: .contentProcessed { err in
                     if let err = err {
-                        server.logLine("relay send err: \(err)")
-                        close(from, upstream: to, server: server)
+                        logTransportError(err, operation: isClientToUpstream ? "Envio ao destino" : "Envio ao cliente", server: server)
+                        close(client, upstream: upstream, server: server)
                         return
                     }
                     if !isEOF {
-                        pump(from: from, to: to, server: server, isClientToUpstream: isClientToUpstream)
+                        pump(from: from, to: to, client: client, upstream: upstream, server: server, isClientToUpstream: isClientToUpstream)
                     } else {
                         // Half-close: signal end of write to peer.
                         to.send(content: nil, isComplete: true, completion: .contentProcessed { _ in
-                            close(from, upstream: to, server: server)
+                            close(client, upstream: upstream, server: server)
                         })
                     }
                 })
             } else if isEOF {
                 to.send(content: nil, isComplete: true, completion: .contentProcessed { _ in
-                    close(from, upstream: to, server: server)
+                    close(client, upstream: upstream, server: server)
                 })
             } else {
-                pump(from: from, to: to, server: server, isClientToUpstream: isClientToUpstream)
+                pump(from: from, to: to, client: client, upstream: upstream, server: server, isClientToUpstream: isClientToUpstream)
             }
         }
     }
 
-    private static let closedOnce = NSMutableSet()
-    private static let closedLock = NSLock()
+    private static func logTransportError(_ error: NWError, operation: String, server: ProxyServer) {
+        if case .posix(let code) = error, code == .ECANCELED || code == .ENOTCONN {
+            server.logLine("\(operation): conexão já encerrada (\(code.rawValue)).", level: .debug)
+        } else {
+            server.logLine("\(operation): \(error).", level: .error)
+        }
+    }
 
     private static func close(_ a: NWConnection, upstream b: NWConnection? = nil, server: ProxyServer) {
         a.cancel()
         b?.cancel()
-        server.connectionClosed()
+        server.connectionClosed(a)
     }
 
     private static func close(_ a: NWConnection, server: ProxyServer) {
         a.cancel()
-        server.connectionClosed()
+        server.connectionClosed(a)
     }
 
     private static func sendErrorAndClose(_ client: NWConnection,
@@ -350,10 +369,11 @@ enum HTTPProxyHandler {
                                           server: ProxyServer,
                                           upstream: NWConnection? = nil) {
         let body = "HTTP/1.1 \(status)\r\nProxy-Agent: MobilePhoneProxy\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"
+        server.logLine("Resposta ao cliente: HTTP \(status).", level: .warning)
         client.send(content: Data(body.utf8), isComplete: true, completion: .contentProcessed { _ in
             client.cancel()
             upstream?.cancel()
-            server.connectionClosed()
+            server.connectionClosed(client)
         })
     }
 }

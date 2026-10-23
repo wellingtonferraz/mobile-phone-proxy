@@ -5,8 +5,10 @@ iPhone app to rotate its carrier IP. The app keeps a WebSocket to its Durable
 Object and the relay hands it signed commands. The phone verifies the HMAC, so
 the relay can't forge a rotation.
 
-Deployed: `https://mpp-relay.d-o-m.workers.dev`. Background, measurements and a
-sequence diagram (in Croatian): `../docs/2026-10-01-ios-ip-rotation.md`.
+This optional upstream component is not deployed or enabled by this fork.
+Configure your own Cloudflare account and relay URL before using it.
+Historical upstream experiments (not current fork guarantees):
+`../docs/2026-10-01-ios-ip-rotation.md`.
 
 ## API
 

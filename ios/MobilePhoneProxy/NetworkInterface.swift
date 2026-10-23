@@ -7,6 +7,35 @@ enum InterfaceKind {
 
 enum NetworkInterface {
 
+    /// Read current Wi-Fi subnet masks for every admission; never cache a former LAN.
+    static func wifiIPv4Subnets() -> [LocalProxyAccess.IPv4Subnet] {
+        var ifaddr: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&ifaddr) == 0, let first = ifaddr else { return [] }
+        defer { freeifaddrs(ifaddr) }
+
+        func ipv4Value(_ address: UnsafeMutablePointer<sockaddr>?) -> UInt32? {
+            guard let address, address.pointee.sa_family == sa_family_t(AF_INET) else { return nil }
+            return address.withMemoryRebound(to: sockaddr_in.self, capacity: 1) {
+                UInt32(bigEndian: $0.pointee.sin_addr.s_addr)
+            }
+        }
+
+        var subnets: [LocalProxyAccess.IPv4Subnet] = []
+        var ptr: UnsafeMutablePointer<ifaddrs>? = first
+        while let cur = ptr {
+            defer { ptr = cur.pointee.ifa_next }
+            let name = String(cString: cur.pointee.ifa_name)
+            let flags = Int32(cur.pointee.ifa_flags)
+            guard ["en0", "en1"].contains(name),
+                  flags & IFF_UP != 0, flags & IFF_RUNNING != 0,
+                  flags & IFF_LOOPBACK == 0,
+                  let address = ipv4Value(cur.pointee.ifa_addr),
+                  let mask = ipv4Value(cur.pointee.ifa_netmask) else { continue }
+            subnets.append(.init(address: address, netmask: mask))
+        }
+        return subnets
+    }
+
     /// Returns the first IPv4 address found for the given interface kind.
     /// WiFi: `en0`, Cellular: `pdp_ip0..pdp_ip3`.
     static func address(for kind: InterfaceKind) -> String? {

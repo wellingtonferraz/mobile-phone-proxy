@@ -8,7 +8,7 @@ options:
 settings:
   base:
     SWIFT_VERSION: "5.9"
-    DEVELOPMENT_TEAM: ""              # fill in your Apple Developer team ID
+    DEVELOPMENT_TEAM: ""     # Select your own team in Xcode or pass DEVELOPMENT_TEAM=...
     CODE_SIGN_STYLE: Automatic
     TARGETED_DEVICE_FAMILY: "1,2"     # iPhone + iPad
 
@@ -53,15 +53,15 @@ targets:
         # the process — and thus the NWListener — alive with the screen locked.
         # `processing` alone only buys a short grace period for TCP listeners.
         # Relay Worker (relay/) that forwards signed rotate commands from the cloud.
-        MPPRelayURL: https://mpp-relay.d-o-m.workers.dev
+        MPPRelayURL: "" # Optional: configure a relay you operate; disabled by default.
         MPPRelayPhoneID: $(MPP_RELAY_PHONE_ID)
         UIBackgroundModes:
           - audio
           - processing
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.stepanic.mobilephoneproxy
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.mobilephoneproxy
         MARKETING_VERSION: "1.1"
-        CURRENT_PROJECT_VERSION: "5"
+        CURRENT_PROJECT_VERSION: "9"
         MPP_RELAY_PHONE_ID: iphone
         INFOPLIST_KEY_UILaunchScreen_Generation: "YES"

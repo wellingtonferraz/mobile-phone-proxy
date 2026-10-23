@@ -20,3 +20,22 @@ android/local.properties
 android/captures/
 android/.cxx/
 *.iml
+
+# Local signing, identities and generated shortcut packages
+*.mobileprovision
+*.p12
+*.p8
+*.pem
+*.key
+*.ipa
+*.xcarchive/
+*.shortcut
+.env
+.env.*
+!.env.example
+*.log
+.local/
+.tests-build/
+node_modules/
+__pycache__/
+*.py[cod]

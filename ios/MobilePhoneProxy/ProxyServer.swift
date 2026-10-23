@@ -12,11 +12,16 @@ final class ProxyServer: ObservableObject {
     @Published var tailscaleIP: String = "—"
     @Published var publicIP: String = "—"
     @Published var publicIPCheckedAt: Date?
+    @Published var publicIPLastError: String?
     @Published var isCheckingPublicIP = false
-    @Published var keepAliveEnabled: Bool = false
+    @Published var keepAliveEnabled: Bool {
+        didSet {
+            UserDefaults.standard.set(keepAliveEnabled, forKey: Self.keepAlivePreferenceKey)
+        }
+    }
     @Published var guidedAccess = UIAccessibility.isGuidedAccessEnabled
-    /// Set while the "Rotate IP" shortcut is believed to be running.
-    @Published var rotateStartedAt: Date?
+    @Published private(set) var rotation = IPRotation()
+    var rotateStartedAt: Date? { rotation.isBusy ? rotation.startedAt : nil }
 
     @Published var isPaired = RotateAuth.isPaired
     @Published var pairingOpenUntil: Date?
@@ -30,19 +35,25 @@ final class ProxyServer: ObservableObject {
 
     /// The live instance, for App Intents (they run in-process but outside SwiftUI).
     static weak var current: ProxyServer?
+    private static let keepAlivePreferenceKey = "backgroundAudioKeepAliveEnabled"
 
     init() {
+        // Enable on first launch; preserve an explicit choice, including OFF.
+        keepAliveEnabled = UserDefaults.standard.object(forKey: Self.keepAlivePreferenceKey) as? Bool ?? true
         Self.current = self
     }
 
-    /// Name of the user-created Shortcut: Airplane ON → Wait 61 s → Airplane OFF.
+    /// User-created Shortcut; the carrier determines whether reconnection changes IP.
     static let rotateShortcutName = "Rotate IP"
 
     private let keepAlive = BackgroundAudioKeepAlive()
     @Published var activeConnections: Int = 0
     @Published var bytesUp: UInt64 = 0
     @Published var bytesDown: UInt64 = 0
-    @Published var log: [String] = []
+    @Published private(set) var logBuffer = ProxyLogBuffer()
+    var log: [String] { logBuffer.entries.map(\.formatted) }
+    private var connectionIDs = Set<ObjectIdentifier>()
+    private var lastPublicIPFailure: String?
 
     private var listener: NWListener?
     private let queue = DispatchQueue(label: "proxy.listener", qos: .userInitiated)
@@ -57,16 +68,25 @@ final class ProxyServer: ObservableObject {
             let params = NWParameters.tcp
             params.allowLocalEndpointReuse = true
             params.includePeerToPeer = false
+            // Incoming access stays on USB/local Wi-Fi; outbound cellular is separate.
+            params.prohibitedInterfaceTypes = [.cellular, .other]
+            (params.defaultProtocolStack.internetProtocol as? NWProtocolIP.Options)?.version = .v4
 
             let listener = try NWListener(using: params, on: nwPort)
             self.listener = listener
 
             listener.newConnectionHandler = { [weak self] conn in
                 guard let self else { return }
-                Task { @MainActor in
-                    self.activeConnections += 1
+                guard LocalProxyAccess.allows(conn.endpoint, wifiSubnets: NetworkInterface.wifiIPv4Subnets()) else {
+                    conn.cancel()
+                    self.logLine("Conexão rejeitada: origem fora do USB ou da sub-rede Wi-Fi atual.", level: .warning, category: .security)
+                    return
                 }
-                HTTPProxyHandler.handle(client: conn, server: self, queue: self.queue)
+                Task { @MainActor in
+                    self.connectionIDs.insert(ObjectIdentifier(conn))
+                    self.activeConnections = self.connectionIDs.count
+                    HTTPProxyHandler.handle(client: conn, server: self, queue: self.queue)
+                }
             }
 
             listener.stateUpdateHandler = { [weak self] state in
@@ -77,7 +97,7 @@ final class ProxyServer: ObservableObject {
                         self.isRunning = true
                         self.refreshIPs()
                         self.updateKeepAlive()
-                        self.append("Listening on port \(self.port)")
+                        self.append("Proxy HTTP iniciado na porta \(self.port). Entrada restrita a USB/Wi-Fi local.")
                         self.startRelay()
                         self.ipRefreshTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { _ in
                             Task { @MainActor in self.refreshIPs() }
@@ -87,7 +107,7 @@ final class ProxyServer: ObservableObject {
                             Task { @MainActor in self.refreshPublicIP() }
                         }
                     case .failed(let err):
-                        self.append("Listener failed: \(err)")
+                        self.append("Falha ao receber conexões: \(err)", level: .error)
                         self.stop()
                     case .cancelled:
                         self.isRunning = false
@@ -99,11 +119,12 @@ final class ProxyServer: ObservableObject {
 
             listener.start(queue: queue)
         } catch {
-            append("Start error: \(error)")
+            append("Não foi possível iniciar: \(error)", level: .error)
         }
     }
 
     func stop() {
+        let wasStarted = listener != nil
         listener?.cancel()
         listener = nil
         isRunning = false
@@ -113,12 +134,15 @@ final class ProxyServer: ObservableObject {
         publicIPTimer = nil
         keepAlive.stop()
         relay.stop()
+        if wasStarted { append("Proxy parado; novas conexões não serão aceitas.") }
     }
 
     /// Starts/stops the silent-audio background keepalive to match current state.
     /// Call after the listener becomes ready, after stop, and when the toggle flips.
     func updateKeepAlive() {
-        keepAlive.onLog = { [weak self] line in self?.logLine(line) }
+        keepAlive.onLog = { [weak self] line in
+            self?.logLine(line, level: line.contains("failed") ? .error : .info, category: .background)
+        }
         if isRunning && keepAliveEnabled {
             keepAlive.start()
         } else {
@@ -132,30 +156,43 @@ final class ProxyServer: ObservableObject {
     nonisolated func recordDown(_ n: Int) {
         Task { @MainActor in self.bytesDown &+= UInt64(n) }
     }
-    nonisolated func connectionClosed() {
+    nonisolated func connectionClosed(_ client: NWConnection) {
+        let id = ObjectIdentifier(client)
         Task { @MainActor in
-            if self.activeConnections > 0 { self.activeConnections -= 1 }
+            guard self.connectionIDs.remove(id) != nil else { return }
+            self.activeConnections = self.connectionIDs.count
         }
     }
-    nonisolated func logLine(_ s: String) {
-        Task { @MainActor in self.append(s) }
+    nonisolated func logLine(_ s: String, level: ProxyLogLevel = .info, category: ProxyLogCategory = .connection) {
+        Task { @MainActor in self.append(s, level: level, category: category) }
     }
 
-    private func append(_ s: String) {
-        let ts = Self.timeFormatter.string(from: Date())
-        log.append("\(ts)  \(s)")
-        if log.count > 300 { log.removeFirst(log.count - 300) }
+    private func append(_ s: String, level: ProxyLogLevel = .info, category: ProxyLogCategory = .server) {
+        logBuffer.append(ProxyLogEntry(s, level: level, category: category))
+    }
+
+    func clearLog() {
+        logBuffer.clear()
+        append("Histórico local limpo. Novos eventos aparecerão aqui.")
     }
 
     private func refreshIPs() {
-        localIP = NetworkInterface.address(for: .wifi) ?? "—"
+        if rotation.expire() {
+            append(rotation.message, level: .warning, category: .rotation)
+            finishRelayJob(ok: false, detail: "rotation result not confirmed")
+        }
+        let newLocalIP = NetworkInterface.address(for: .wifi) ?? "—"
+        if newLocalIP != localIP {
+            append(newLocalIP == "—" ? "Wi-Fi indisponível. O acesso USB depende do túnel no Mac." : "Endereço Wi-Fi atual: \(newLocalIP):\(port).", category: .network)
+            localIP = newLocalIP
+        }
         let newCellular = NetworkInterface.address(for: .cellular) ?? "—"
         if newCellular != cellularIP {
             // A new carrier-internal address (e.g. after airplane mode) is the
             // moment the CGNAT public address may have changed too — re-check now
             // instead of waiting for the 30 s timer.
             if cellularIP != "—" || newCellular != "—" {
-                append("Cellular IP \(cellularIP) → \(newCellular)")
+                append("Endereço interno da rede móvel: \(cellularIP) → \(newCellular).", category: .network)
             }
             cellularIP = newCellular
             if isRunning, newCellular != "—" {
@@ -212,7 +249,21 @@ final class ProxyServer: ObservableObject {
             "guidedAccess": UIAccessibility.isGuidedAccessEnabled,
             "rotating": rotateStartedAt != nil,
             "paired": RotateAuth.isPaired,
+            "build": Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?",
+            "isRunning": isRunning,
+            "port": port,
+            "activeConnections": activeConnections,
+            "keepAliveEnabled": keepAliveEnabled,
+            "keepAliveActive": keepAlive.isActive,
+            "rotationMode": "user-created-shortcut",
+            "rotationShortcut": Self.rotateShortcutName,
+            "rotationShortcutConfigured": "not-verified",
+            "rotationPhase": rotation.phase.rawValue,
+            "rotationMessage": rotation.message,
+            "automaticRotationScheduled": false,
+            "usbTunnelStatus": "not-observable-from-iphone",
         ]
+        if let error = publicIPLastError { d["publicIPLastError"] = error }
         if let at = publicIPCheckedAt { d["publicIPCheckedAt"] = ISO8601DateFormatter().string(from: at) }
         if let last = lastRotateCommand { d["lastRotateCommand"] = last }
         d.merge(extra) { _, new in new }
@@ -222,7 +273,16 @@ final class ProxyServer: ObservableObject {
 
     /// In-memory app log plus the persistent App Intent record (see IntentEventLog).
     private func logJSON() -> String {
-        let d: [String: Any] = ["lines": log, "intentEvents": IntentEventLog.events]
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let events = (try? JSONSerialization.jsonObject(with: encoder.encode(logBuffer.entries))) ?? []
+        // Historical intent records may include the caller's message. Export
+        // outcome metadata only; command payloads are not needed for diagnosis.
+        let intentEvents = IntentEventLog.events.map { event in
+            event.filter { ["at", "event", "pid", "serverLive", "appState"].contains($0.key) }
+                .mapValues { value in (value as? String).map(ProxyLogEntry.sanitize) ?? value }
+        }
+        let d: [String: Any] = ["lines": log, "events": events, "limit": ProxyLogBuffer.limit, "intentEvents": intentEvents]
         let data = (try? JSONSerialization.data(withJSONObject: d, options: [.sortedKeys])) ?? Data()
         return String(data: data, encoding: .utf8) ?? "{}"
     }
@@ -231,29 +291,32 @@ final class ProxyServer: ObservableObject {
     /// "Set Airplane Mode" action. We launch the user's shortcut by URL; the
     /// x-success/x-error callbacks bring this app back to the foreground.
     /// Opening another app only works while we are the foreground app.
-    private func requestRotate() -> (status: String, json: String) {
-        if let started = rotateStartedAt, Date().timeIntervalSince(started) < 180 {
+    @discardableResult
+    func requestRotate() -> (status: String, json: String) {
+        if rotation.expire() { append(rotation.message, level: .warning, category: .rotation) }
+        if rotation.isBusy {
             return ("409 Conflict", statusJSON(extra: ["error": "rotation already in progress"]))
         }
-        guard UIApplication.shared.applicationState == .active else {
+        guard isRunning, UIApplication.shared.applicationState == .active, !UIAccessibility.isGuidedAccessEnabled else {
+            rotation.fail("Inicie o proxy, mantenha este app aberto e desligue o Acesso Guiado para abrir Atalhos.")
+            append(rotation.message, level: .warning, category: .rotation)
             return ("409 Conflict", statusJSON(extra: ["error": "app is not in the foreground; iOS only lets the foreground app open Shortcuts"]))
         }
-        var c = URLComponents(string: "shortcuts://x-callback-url/run-shortcut")!
-        c.queryItems = [
-            URLQueryItem(name: "name", value: Self.rotateShortcutName),
-            URLQueryItem(name: "x-success", value: "mobilephoneproxy://rotate-done"),
-            URLQueryItem(name: "x-cancel", value: "mobilephoneproxy://rotate-cancel"),
-            URLQueryItem(name: "x-error", value: "mobilephoneproxy://rotate-error"),
-        ]
-        guard let url = c.url else { return ("500 Internal Server Error", #"{"error":"bad url"}"#) }
-        rotateStartedAt = Date()
-        append("Rotate requested — opening shortcut \"\(Self.rotateShortcutName)\" (public IP \(publicIP))")
+        let recent = publicIPCheckedAt.map { Date().timeIntervalSince($0) <= 60 } ?? false
+        let baseline = recent && publicIPLastError == nil && publicIP != "—" && cellularIP != "—" ? publicIP : nil
+        _ = rotation.begin(previousIP: baseline)
+        guard let url = rotation.shortcutURL, let attempt = rotation.id else {
+            rotation.fail("Não foi possível preparar a abertura do atalho.")
+            return ("500 Internal Server Error", #"{"error":"bad url"}"#)
+        }
+        append(rotation.message, category: .rotation)
         // Delay so the HTTP 202 reaches the Mac before airplane mode cuts the link.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+            guard let self, self.rotation.id == attempt, self.rotation.phase == .requested else { return }
             UIApplication.shared.open(url) { [weak self] ok in
-                guard let self, !ok else { return }
-                self.rotateStartedAt = nil
-                self.append("Rotate failed: iOS refused to open Shortcuts (Guided or Assistive Access on?)")
+                guard let self, !ok, self.rotation.id == attempt, self.rotation.phase == .requested else { return }
+                self.rotation.fail("O iOS recusou abrir Atalhos. Confira se o app está instalado e se Acesso Guiado/Assistivo está desligado.")
+                self.append(self.rotation.message, level: .error, category: .rotation)
                 self.finishRelayJob(ok: false, detail: "iOS refused to open Shortcuts (Guided or Assistive Access on?)")
             }
         }
@@ -292,14 +355,14 @@ final class ProxyServer: ObservableObject {
     func rotateCommandVerified(_ verdict: RotateAuth.Verdict, via source: String = "iMessage") {
         let ts = Self.timeFormatter.string(from: Date())
         lastRotateCommand = "\(ts) \(source) \(verdict.description)"
-        append("\(source) rotate command \(verdict.description)")
+        append("\(source): comando de rotação \(verdict.description)", category: .rotation)
     }
 
     // MARK: - Relay
 
     private func startRelay() {
         relay.onState = { [weak self] s in self?.relayState = s }
-        relay.onLog = { [weak self] line in self?.append(line) }
+        relay.onLog = { [weak self] line in self?.append(line, category: .rotation) }
         relay.helloInfo = { [weak self] in
             var d: [String: Any] = ["build": Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"]
             if let ip = self?.publicIP, ip != "—" { d["publicIP"] = ip }
@@ -359,19 +422,10 @@ final class ProxyServer: ObservableObject {
 
     /// Callback from Shortcuts (x-success / x-cancel / x-error).
     func handleCallback(_ url: URL) {
-        guard url.scheme == "mobilephoneproxy" else { return }
-        let outcome = url.host ?? "?"
-        let elapsed = rotateStartedAt.map { String(format: "%.0f s", Date().timeIntervalSince($0)) } ?? "?"
-        rotateStartedAt = nil
-        if outcome == "rotate-done" {
-            append("Rotate shortcut finished after \(elapsed)")
-            finishRelayJob(ok: true)
-        } else {
-            let msg = URLComponents(url: url, resolvingAgainstBaseURL: false)?
-                .queryItems?.first(where: { $0.name == "errorMessage" })?.value ?? ""
-            append("Rotate shortcut \(outcome) after \(elapsed) \(msg)")
-            finishRelayJob(ok: false, detail: "shortcut \(outcome) \(msg)")
-        }
+        guard rotation.receive(url) else { return }
+        let completed = rotation.phase == .checking
+        append(rotation.message, level: completed ? .info : .warning, category: .rotation)
+        finishRelayJob(ok: completed, detail: completed ? nil : "shortcut did not complete")
         refreshIPs()
         refreshPublicIP()
     }
@@ -380,25 +434,41 @@ final class ProxyServer: ObservableObject {
     func refreshPublicIP() {
         guard !isCheckingPublicIP else { return }
         isCheckingPublicIP = true
+        let lookupStartedAt = Date()
         PublicIP.fetch(queue: lookupQueue) { [weak self] result in
             Task { @MainActor in
                 guard let self else { return }
                 self.isCheckingPublicIP = false
                 switch result {
                 case .success(let ip):
+                    if self.lastPublicIPFailure != nil {
+                        self.append("Consulta do IP móvel voltou a responder.", category: .network)
+                    }
+                    self.lastPublicIPFailure = nil
+                    self.publicIPLastError = nil
                     if ip != self.publicIP {
-                        self.append("Public IP \(self.publicIP) → \(ip)")
+                        self.append(self.publicIP == "—" ? "IP público móvel consultado: \(ip)." : "Mudança de IP móvel observada: \(self.publicIP) → \(ip).", category: .network)
                         self.publicIP = ip
                     }
                     self.publicIPCheckedAt = Date()
-                    if self.relayJob?.awaitingIP == true {
+                    let previousPhase = self.rotation.phase
+                    self.rotation.observe(ip, lookupStartedAt: lookupStartedAt)
+                    if self.rotation.phase != previousPhase {
+                        self.append(self.rotation.message, category: .rotation)
+                    }
+                    if self.relayJob?.awaitingIP == true && !self.rotation.isBusy {
                         self.sendRelayResult()
                     } else if ip != self.relayReportedIP {
                         self.relay.send(["type": "ip", "publicIP": ip])
                     }
                     self.relayReportedIP = ip
                 case .failure(let error):
-                    self.append("Public IP lookup failed: \(error.localizedDescription)")
+                    let detail = ProxyLogEntry.sanitize(error.localizedDescription)
+                    self.publicIPLastError = detail
+                    if detail != self.lastPublicIPFailure {
+                        self.append("Falha na consulta do IP móvel: \(detail). O último valor pode estar desatualizado.", level: .warning, category: .network)
+                    }
+                    self.lastPublicIPFailure = detail
                 }
             }
         }

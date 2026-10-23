@@ -4,7 +4,7 @@
 # Two triggers for the user-made "Rotate IP" Shortcut
 # (Airplane ON → Wait 91 s → Airplane OFF):
 #
-#   default     GET /__rotate over the tailnet; the app opens Shortcuts by URL.
+#   default     GET /__rotate over USB or trusted local Wi-Fi; the app opens Shortcuts by URL.
 #               Needs the app in the foreground; blocked by Guided Access and
 #               unavailable in Assistive Access (Shortcuts can't be added there).
 #   --imessage  Sends a signed "MPP-ROTATE v1 <ts> <nonce> <hmac>" iMessage. A
@@ -34,14 +34,14 @@
 # Exit: 0 new IP · 2 same IP · 3 request refused · 4 phone never dropped/returned
 set -uo pipefail
 
-PHONE="100.71.146.11:8888"
+PHONE="${MPP_PHONE:-127.0.0.1:8889}"
 MODE=url
 TO="${MPP_IMESSAGE_TO:-}"
 BACK_TIMEOUT=300          # seconds to wait for the phone after triggering
 RESEND_AFTER=60           # --imessage: seconds without a drop before checking /__log
 MAX_SENDS=3
 KC_SERVICE="mobile-phone-proxy-rotate"
-RELAY="${MPP_RELAY:-https://mpp-relay.d-o-m.workers.dev}"
+RELAY="${MPP_RELAY:-}"
 PHONE_ID="${MPP_PHONE_ID:-iphone}"
 
 while [ $# -gt 0 ]; do
@@ -139,6 +139,7 @@ case "$MODE" in
     hexkey=$(hex_key) || exit 3
     hmac_hex "$hexkey" "MPP-RELAY|v1|$PHONE_ID"; echo; exit 0 ;;
   relay)
+    [ -n "$RELAY" ] || { echo "Set MPP_RELAY to your own relay URL first." >&2; exit 3; }
     cmd=$(sign_command) || exit 3
     base="$RELAY/v1/phones/$PHONE_ID"
     resp=$(curl -s -m 15 -w '\n%{http_code}' -X POST -H 'Content-Type: application/json' \

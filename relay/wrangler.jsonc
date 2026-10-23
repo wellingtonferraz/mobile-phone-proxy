@@ -3,7 +3,6 @@
   "name": "mpp-relay",
   "main": "src/index.ts",
   "compatibility_date": "2026-09-01",
-  "account_id": "7dc7167b7e2e00923bfa7cd697df14e4",
   "workers_dev": true,
   "observability": { "enabled": true },
   "durable_objects": {

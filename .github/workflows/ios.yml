@@ -1,0 +1,23 @@
+name: iOS checks
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test-and-build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Test logic and scripts (no phone or rotation)
+        run: ./scripts/test.sh
+      - name: Generate project
+        run: cd ios && xcodegen generate
+      - name: Build for simulator without signing
+        run: >-
+          xcodebuild -project ios/MobilePhoneProxy.xcodeproj
+          -scheme MobilePhoneProxy -configuration Debug
+          -destination 'generic/platform=iOS Simulator'
+          -derivedDataPath build CODE_SIGNING_ALLOWED=NO build

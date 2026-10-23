@@ -1,236 +1,85 @@
-# Mobile Phone Proxy
+# Mobile Phone Proxy — iOS community improvements
 
-Turn your phone into an HTTP CONNECT proxy that routes traffic out over its
-**cellular** interface, while exposing the listener on **WiFi**. Point your
-laptop at `http://<phone-wifi-ip>:8888` and every request egresses through
-the carrier instead of your home network.
+An open-source fork of **[Mobile Phone Proxy by Matija Stepanic (@stepanic)](https://github.com/stepanic/mobile-phone-proxy)**, with iPhone usability, local-network access controls, diagnostics, and USB tooling contributed by **Wellington Ferraz**. The original project and Git history are preserved under the [MIT license](LICENSE). See [credits](CREDITS.md).
 
-Native apps for **iOS** (Swift / Network.framework) and **Android**
-(Kotlin / `java.net.Socket` bound to the cellular `Network`), plus a
-**Windows/desktop** build (Go, single static `.exe`) for the "parked node"
-case. No third-party dependencies, no servers, no VPN profile.
+Use an iPhone as an **HTTP proxy with HTTPS CONNECT**, reached from a Mac over USB or from a computer on the same private Wi-Fi subnet. Outbound connections try cellular first; the inherited fallback can use the default route, including Wi-Fi. This is not a VPN or a guarantee of cellular-only egress.
 
-## Why
+**[Installation guide (English)](docs/INSTALL.md) · [Guia de instalação (Português)](docs/INSTALACAO-PT-BR.md)**
 
-- You're on a WiFi that blocks something your phone's data plan doesn't (and
-  vice-versa).
-- You want a quick way to test how a service behaves from a mobile carrier IP
-  (geo, CGNAT, AS-based rate limiting, etc.) without tethering.
-- You're traveling and the hotel WiFi is hostile; the phone's LTE/5G isn't.
-- You want a small, auditable codebase that does exactly one thing — no
-  account, no telemetry, no cloud.
+## What's improved in this fork
 
-## How it works
+- **Background audio keepalive:** enabled on first launch, remembers your ON/OFF choice. Silent audio is generated locally; Spotify is not required. iOS can still interrupt or suspend the app.
+- **Local access policy:** IPv4 loopback or the current private Wi-Fi subnet only; rejects inbound cellular/other interfaces and IPv6. This policy applies to the iOS app, not the inherited Android/Windows apps.
+- **Clear connection instructions:** current Wi-Fi address in the app; separate USB instructions for `127.0.0.1:8889` on the Mac running the tunnel.
+- **Diagnostics:** 300 recent events in memory, timestamps/levels/categories, filters, copy/clear, common credential redaction, and connection counting that closes each client once.
+- **Manual IP rotation:** `Rotação do IP → Trocar IP agora` opens your **Rotate IP** Shortcut. Request, completion, and a newly observed public IP are separate states. Duplicate requests and stale callbacks/lookups cannot confirm a new IP. No periodic rotation is scheduled.
+- **Portable USB launcher:** explicitly targets a physical device, reuses only a matching tunnel, diagnoses a stopped app, and cleans up only a tunnel it created.
+- **Repeatable checks:** Swift tests, launcher tests, an unsigned Shortcut source, and a simulator build workflow.
 
-```
-  ┌──────────┐   WiFi    ┌─────────────┐   Cellular   ┌──────────────┐
-  │  laptop  │ ────────▶ │    phone    │ ──────────▶  │   internet   │
-  │  curl -x │           │  (listener) │ (forced bind) │              │
-  └──────────┘           └─────────────┘              └──────────────┘
-```
+The modified iOS interface is currently primarily Portuguese. The upstream Android, Windows, relay and iMessage components are retained for developers; this fork has not revalidated their end-to-end behavior. Direct Tailscale access to the modified iOS listener is intentionally incompatible with its local-only access policy.
 
-1. A TCP listener binds to all interfaces on a chosen port (default `8888`).
-2. For each accepted client, the proxy reads request headers up to
-   `CRLF CRLF` (capped at 64 KiB).
-3. `CONNECT host:port` → opens a raw TCP socket **bound to the cellular
-   interface**, returns `200`, and full-duplex relays bytes with half-close
-   on EOF.
-4. Plain `GET/POST/...` with absolute-URI → same outbound binding, hop-by-hop
-   headers stripped per RFC 9110 §7.6.1 (including any name the inbound
-   `Connection` header lists).
-5. DNS is resolved through the cellular network too, so DNS leakage doesn't
-   defeat the point.
+## Quick start
 
-The trick on both platforms is forcing the outbound socket onto the cellular
-interface even when WiFi is the system default route:
-
-- **iOS** — `NWParameters.requiredInterfaceType = .cellular` on outbound
-  `NWConnection`s. iOS routes the connection through the cellular PDP context
-  even though the listener lives on WiFi. If the system denies the
-  cellular-pinned socket (it can, by policy), the handler retries once on the
-  default route and logs loudly — egress is then cellular **only if WiFi is
-  off**, mirroring the Android fallback below.
-- **Android** — query `ConnectivityManager` for a `Network` with
-  `TRANSPORT_CELLULAR + NET_CAPABILITY_INTERNET`, then call
-  `network.bindSocket(socket)` before `connect()`. Falls back gracefully if
-  the device or ROM refuses to bind (rare, but it happens).
-
-## Status
-
-| Platform | State | Verified on |
-| --- | --- | --- |
-| Android | **Working end-to-end**, hardened over several iterations | Xiaomi 17 Ultra on AS205714 Telemach mobile |
-| iOS     | **Working end-to-end** on a physical device | iPhone 15 Pro (iOS 26.4.2) on Telemach mobile, remote over Tailscale |
-| Windows | **Working** — protocol smoke-tested, cross-compiles to a static `.exe` | macOS-built `proxy.exe` (PE32+), relay verified on the build host |
-
-The Android side has been iterated on against an actual device and real
-mobile traffic — connection lifecycle, hop-by-hop header handling, and the
-always-on-VPN `bindSocket` fallback all came out of fixing things that broke
-in practice.
-
-The iOS side started as a single-pass translation of the same protocol into
-Swift/Network.framework and has now been validated on real hardware: built and
-installed on a physical iPhone, reached remotely over Tailscale with the
-phone's WiFi off. A direct request from the laptop exited via the home fiber
-IP; the same request through the phone exited via a different mobile-carrier IP
-in a different city — confirming true cellular egress, the same result the
-Android port produces. The remaining real limitation is background execution
-(see Caveats): iOS suspends a plain-app `NWListener`, so the phone runs as a
-foreground "parked node" rather than a pocketed daemon.
-
-## Repository layout
-
-```
-ios/        Swift sources, project.yml for XcodeGen
-            – ProxyServer.swift          NWListener + NWConnection wiring
-            – HTTPProxyHandler.swift     CONNECT + absolute-URI parser
-            – NetworkInterface.swift     WiFi/cellular/Tailscale IP discovery
-            – ContentView.swift          SwiftUI control panel
-
-android/    Standard AGP project, Compose UI
-            – ProxyService.kt            Foreground service, server socket
-            – HttpProxyHandler.kt        Same protocol as the Swift version
-            – NetworkInterfaces.kt       WiFi/cellular Network lookup
-            – ui/ProxyScreen.kt          Material 3 control panel
-
-windows/    Go source for the desktop build (no cgo, single static .exe)
-            – proxy.go                   Same protocol as the mobile handlers
-            – build.sh                   Cross-compile from macOS/Linux
-            – README.md                  Build + run instructions
-
-macos/      test_proxy.sh — quick smoke test from your laptop
-            rotate-ip.sh  — rotate the iPhone's carrier IP (airplane-mode cycle)
-
-relay/      Cloudflare Worker + Durable Object that forwards signed rotate
-            commands from any cloud job to the app over a WebSocket
-
-docs/       Experiment notes — e.g. 2026-10-01-ios-ip-rotation.md
-```
-
-## Build
-
-### iOS
-
-Requires Xcode 16+ and [XcodeGen](https://github.com/yonaskolb/XcodeGen).
+You need a Mac, a compatible full Xcode installation, an Apple Account for your own signing, XcodeGen, and a physical iPhone with mobile data. The deployment target is iOS 16; use Xcode that supports your macOS and device OS.
 
 ```bash
+git clone https://github.com/wellingtonferraz/mobile-phone-proxy.git
+cd mobile-phone-proxy
+brew install xcodegen libusbmuxd
+# Optional: prepare a locally signed Shortcut, without running it.
+./macos/prepare-shortcut.sh
 cd ios
-xcodegen generate         # produces MobilePhoneProxy.xcodeproj
+xcodegen generate
 open MobilePhoneProxy.xcodeproj
 ```
 
-Fill in `DEVELOPMENT_TEAM` in `project.yml` before regenerating if you want
-to sign with your own team — or pass it on the command line. To build, install
-and launch on a connected device straight from the CLI:
+In Xcode, select **your own team**, replace `com.example.mobilephoneproxy` with a **unique bundle identifier**, choose your connected iPhone and Run. Unlock/trust the device, enable Developer Mode if requested, and allow Local Network access. The app starts the proxy after launch; `Start proxy` restarts it after a manual stop. See the full guides for signing, reinstalling and command-line builds. Project regeneration resets Xcode-only signing edits; update `ios/project.yml` locally or pass build settings when needed.
+
+For **Wi-Fi**, use the address shown in the app, port `8888`, proxy type **HTTP**, and blank username/password. For **USB**, keep the app open and run:
 
 ```bash
-DEV_UDID=$(xcrun xctrace list devices 2>&1 | awk '/\(/{print $NF}' | tr -d '()' | head -1)
+xcrun xctrace list devices  # copy the physical iPhone UDID in parentheses
+MPP_BUNDLE_ID=com.yourname.mobilephoneproxy \
+  ./macos/start-usb-proxy.sh YOUR_DEVICE_UDID
+curl --noproxy '' --proxy http://127.0.0.1:8889 https://example.com/
+```
+
+The USB address belongs to that Mac; it is not the iPhone's Wi-Fi address. Closing a terminal that owns the tunnel stops that tunnel. A second iPhone needs its own signing/device registration and a separate Mac port, for example `8890`.
+
+## Manual rotation
+
+Create or import a Shortcut named **Rotate IP**: **Airplane Mode ON → Wait 91 seconds → Airplane Mode OFF**. [Readable source](shortcuts/Rotate%20IP.plist) and [installation details](docs/INSTALL.md#5-manual-ip-rotation) are included. The signed package is generated locally and excluded from Git.
+
+Tap **Trocar IP agora** with the proxy app in the foreground and Guided Access off. Keep Shortcuts open until it finishes. The connection will drop temporarily; the carrier may return the same IP. If you interrupt the Shortcut, make sure Airplane Mode is off. The 30-second public-IP check only observes the address; it does not rotate it.
+
+## Access and privacy
+
+The current Wi-Fi subnet is trusted **without authentication**. The local admission rule covers proxy traffic and control endpoints such as `/__status`, `/__log`, `/__rotate`, and the time-limited pairing endpoint. A permitted local computer can therefore view diagnostics or request rotation while the app is in the foreground. Use a trusted network; do not publish/forward the listener to the Internet. Local relays/NAT can forward outside traffic, so this is not absolute protection from forwarding by a trusted device.
+
+Logs may contain IPs and destination hosts. Common credentials are redacted, but inspect copied diagnostics before sharing. HTTPS CONNECT tunnels TLS bytes without terminating TLS; destination/connection metadata is still visible. The app periodically queries an external IP service. Optional relay support is **unconfigured by default**; configure your own server deliberately if you develop that path.
+
+To avoid the inherited Wi-Fi fallback, use **USB with Wi-Fi disabled in iPhone Settings** and mobile data enabled. Check the actual exit IP and logs for your carrier. One iPhone does not provide a separate public IP for each browser profile or proxy port.
+
+## Validation and limitations
+
+The local build underlying these changes was installed on an **iPhone 15 Pro Max / iOS 26.6**, using **Xcode 26.6 on macOS 26.4.1**. USB/Wi-Fi health and HTTPS requests passed, and keepalive was active. Logic tests cover rotation state, log sanitization and local admission; the public configuration is also built without signing for the simulator.
+
+**Actual Airplane Mode rotation was not executed in this fork's validation.** The Shortcut was imported and its presence on the phone confirmed. Long-running background availability, a second phone on iOS 27.1, and a TestFlight/App Store release remain untested. Upstream experiments in `docs/2026-10-01-*` describe the original author's setup, not guarantees for this fork.
+
+Free Personal Team signing expires after seven days. A GitHub link provides source code, not a universally installable iPhone app. TestFlight distribution requires Apple Developer Program membership and applicable beta review; no TestFlight link or signed IPA is provided here. See the guides and [Apple's account limits](https://developer.apple.com/help/account/basics/about-your-developer-account).
+
+## Development
+
+```bash
+./scripts/test.sh
+cd ios && xcodegen generate
 xcodebuild -project MobilePhoneProxy.xcodeproj -scheme MobilePhoneProxy \
-  -destination "id=$DEV_UDID" -allowProvisioningUpdates \
-  DEVELOPMENT_TEAM=YOURTEAMID CODE_SIGN_STYLE=Automatic build
-APP=$(xcodebuild -project MobilePhoneProxy.xcodeproj -scheme MobilePhoneProxy -showBuildSettings 2>/dev/null | awk -F' = ' '/ CODESIGNING_FOLDER_PATH/{print $2}')
-xcrun devicectl device install app --device "$DEV_UDID" "$APP"
-xcrun devicectl device process launch --device "$DEV_UDID" com.stepanic.mobilephoneproxy
+  -destination 'generic/platform=iOS Simulator' \
+  -derivedDataPath ../build CODE_SIGNING_ALLOWED=NO build
 ```
 
-A new device must be registered in your team once (Xcode → Signing &
-Capabilities → select the device → *Register Device*); the CLI won't auto-add
-it. On hardware the proxy does **not** auto-start — tap **Start proxy** and
-grant the local-network permission prompt.
+Tests and the CI simulator build do not change Airplane Mode or contact a physical phone. [Contributing](CONTRIBUTING.md) · [Changes](CHANGELOG.md).
 
-### Android
+## License and authorship
 
-Requires Android Studio Ladybug (AGP 8.7+) or newer, JDK 17.
-
-```bash
-cd android
-cp local.properties.example local.properties      # then point sdk.dir at your SDK
-./gradlew :app:assembleDebug
-./gradlew :app:installDebug        # if a device is connected via adb
-```
-
-The app then needs WiFi (for the listener) **and** mobile data (for egress)
-active simultaneously. On modern Android you also need to grant the
-notification permission so the foreground service can stay alive.
-
-### Windows / desktop
-
-Requires Go 1.21+ **only on the build host** — the produced `.exe` needs
-nothing on the target machine. No Windows build machine is needed; Go
-cross-compiles a fully static native binary:
-
-```bash
-cd windows
-./build.sh                 # -> dist/proxy.exe (windows/amd64)
-# == GOOS=windows GOARCH=amd64 go build -o dist/proxy.exe ./
-```
-
-Copy `proxy.exe` to the Windows box and double-click it (or `.\proxy.exe -port
-9000 -verbose`). Unlike the phones there's no cellular interface to pin to, so
-egress follows the system default route — ideal as a Tailscale-reachable
-"parked node". See [`windows/README.md`](windows/README.md) for flags and the
-optional `-bind <source-ip>` for multi-interface machines.
-
-## Use
-
-1. Launch the app, hit **Start proxy**.
-2. The screen shows the listener URL — e.g. `http://192.168.1.42:8888`.
-3. On your laptop:
-
-```bash
-export https_proxy=http://192.168.1.42:8888
-export http_proxy=http://192.168.1.42:8888
-curl https://ifconfig.me/ip      # should print your carrier IP, not your home IP
-```
-
-Or run the included smoke test:
-
-```bash
-./macos/test_proxy.sh 192.168.1.42 8888
-```
-
-### Remote (phone not on your WiFi)
-
-Put both devices on a [Tailscale](https://tailscale.com) tailnet — no code
-change, the listener already binds all interfaces (including `utun*`). Then:
-
-1. Keep Tailscale on the phone, and **turn the phone's WiFi off** so cellular
-   becomes its default route (otherwise iOS/Android egress over WiFi even with
-   the cellular binding requested).
-2. Point the laptop at the phone's **tailnet** IP — the app shows it as the
-   *Tailscale IP* (iOS) — e.g. `curl -x http://100.x.y.z:8888 https://ifconfig.me/ip`.
-
-The phone egresses over cellular; the Mac reaches it over the tailnet. Note
-that with WiFi off Tailscale falls back to a DERP relay (CGNAT blocks direct
-hole-punching), so throughput is fine for scraping but not low-latency work.
-
-### Rotating the carrier IP (iOS)
-
-Cycling airplane mode for ~91 s gets a new CGNAT public IP on Telemach HR
-mobile (shorter than ~61 s returns the same one). `macos/rotate-ip.sh`
-triggers it remotely through a user-made Shortcut, either over the tailnet
-(`GET /__rotate`), by a signed iMessage (`--imessage`), or through the relay
-Worker in `relay/` (`--relay`, no tailnet needed). Setup, measurements
-and pitfalls: [docs/2026-10-01-ios-ip-rotation.md](docs/2026-10-01-ios-ip-rotation.md).
-
-## Caveats
-
-- iOS suspends arbitrary TCP listeners in the background (~15 min observed),
-  and there is no foreground-service equivalent like Android's. The app
-  declares `UIBackgroundModes: processing` and keeps the screen awake
-  (`isIdleTimerDisabled`), but the supported model is a **foreground "parked
-  node"**: app open, screen on, on a charger. A pocketed/locked phone will
-  stop serving. (A Tailscale exit node would be the no-app alternative, but
-  iOS cannot *advertise* as an exit node — it can only use one.)
-- Android's foreground-service rules around `dataSync` are strict — the
-  service is fine as long as the user-initiated start path is followed.
-- On always-on VPNs (Tailscale, Mullvad, etc.) `bindSocket` may be refused
-  by the kernel. The Android handler falls back to an unbound socket so the
-  proxy keeps working; the egress interface then follows the system default
-  route (usually the VPN). Decide accordingly.
-- TLS payloads are tunneled raw via CONNECT — the proxy does not terminate
-  TLS, does not see plaintext, and does not snoop. There's nothing to log.
-
-## License
-
-[MIT](./LICENSE).
+**MIT. Original author: [Matija Stepanic](https://github.com/stepanic). Original repository: [stepanic/mobile-phone-proxy](https://github.com/stepanic/mobile-phone-proxy).** Fork improvements by [Wellington Ferraz](https://github.com/wellingtonferraz). This is an independent fork, not an official upstream release or endorsement.
