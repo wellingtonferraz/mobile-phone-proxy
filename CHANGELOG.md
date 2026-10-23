@@ -1,5 +1,12 @@
 # Fork changes
 
+## 2026-10-23 — iProxy name and app icon (build 10)
+
+- Name the installed iOS app and its main screen **iProxy**.
+- Add an original opaque app icon through the Xcode asset catalog.
+- Keep bundle identifiers, callback scheme and project/target names unchanged for existing installations.
+- Document the visible name separately from build commands; local checks remain available, with no GitHub Actions workflow.
+
 ## 2026-10-23 — iOS local improvements (build 9)
 
 Based on upstream `23b009febe6038ff561d863b024359415310f99c`.

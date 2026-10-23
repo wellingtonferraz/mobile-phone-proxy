@@ -66,7 +66,7 @@ else
   kill -0 "$proxy_pid" 2>/dev/null || { echo "iproxy stopped. See $proxy_log" >&2; exit 1; }
 fi
 if ! proxy_ready; then
-  echo 'App did not respond. Restarting only Mobile Phone Proxy on the selected device…'
+  echo 'App did not respond. Restarting only iProxy on the selected device…'
   if ! xcrun devicectl device process launch --device "$phone_id" --terminate-existing \
       --timeout 15 "$bundle_id" >>"$proxy_log" 2>&1; then
     echo "Unlock/trust the iPhone and check MPP_BUNDLE_ID. Details: $proxy_log" >&2; exit 1
