@@ -167,7 +167,7 @@ Você pode compilar e instalar no outro iPhone usando o mesmo processo e uma ass
 
 Um link público para este GitHub permite baixar o **código-fonte**. Ele não instala automaticamente um app não assinado no iPhone.
 
-- **Conta Apple gratuita / Personal Team:** permite testes pessoais com limitações; o provisionamento expira após 7 dias e exige nova instalação. Veja as [regras da conta de desenvolvimento](https://developer.apple.com/help/account/basics/about-your-developer-account).
+- **Conta Apple gratuita / Personal Team:** permite testes pessoais com limitações; o provisionamento expira após 7 dias e exige nova instalação. O script `macos/Renovar MyProxy.command` refaz a compilação, a instalação e a abertura do app com o iPhone no cabo; defina `MPP_DEVICE_UDID` e `MPP_BUNDLE_ID` em `~/.config/myproxy/renew.env`. Veja as [regras da conta de desenvolvimento](https://developer.apple.com/help/account/basics/about-your-developer-account).
 - **Apple Developer Program:** custa US$ 99 por ano, ou o preço local apresentado pela Apple. Veja o [programa oficial](https://developer.apple.com/programs/).
 - **TestFlight:** permite convidar testadores e distribuir por link, após configurar o App Store Connect; testes externos podem exigir revisão da Apple e os builds expiram após 90 dias. Este fork ainda não foi enviado ao TestFlight. Consulte o [TestFlight](https://developer.apple.com/testflight/) e a [visão geral](https://developer.apple.com/help/app-store-connect/test-a-beta-version/testflight-overview/).
 

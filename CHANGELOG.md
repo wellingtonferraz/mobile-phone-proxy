@@ -1,5 +1,9 @@
 # Fork changes
 
+## 2026-11-16 — signature renewal script
+
+- Add `macos/Renovar MyProxy.command`: rebuilds, verifies the new signature, installs and opens the app on a USB-connected iPhone, then checks the USB proxy. Device identifiers are read from the environment or `~/.config/myproxy/renew.env`.
+
 ## 1.1 — build 12
 
 - Rename the iOS display name and in-app title to MyProxy at the owner's request. Keep existing app data and technical identifiers.

@@ -149,7 +149,7 @@ Advanced upstream iMessage/relay tooling is retained, but is not required for th
 - **USB failure:** unlock/trust the phone, check data cable, run the launcher again, check `MPP_BUNDLE_ID`, and keep the app on port 8888.
 - **Wi-Fi failure:** verify the current private IPv4, matching subnet, local-network permission, and router client isolation. IPv6 and inbound cellular/other interfaces are rejected.
 - **Shortcut not found:** check the exact name and install it in the phone's Shortcuts app. Opening Shortcuts is not proof that the requested Shortcut ran.
-- **App no longer opens after a week:** free Personal Team provisioning expires after seven days; reconnect and rebuild/reinstall. The existing provisioning profile does not automatically authorize a second device.
+- **App no longer opens after a week:** free Personal Team provisioning expires after seven days; reconnect and rebuild/reinstall. `macos/Renovar MyProxy.command` automates it over USB; set `MPP_DEVICE_UDID` and `MPP_BUNDLE_ID` in `~/.config/myproxy/renew.env`. The existing provisioning profile does not automatically authorize a second device.
 - **Newer iOS not recognized:** check Xcode/device support; a newer Xcode may also require a newer macOS. Do not assume compatibility solely from the app's deployment target.
 
 ## 7. Distribution and development
