@@ -1,5 +1,9 @@
 # Fork changes
 
+## 2026-11-16 — USB/Wi-Fi fallback relay
+
+- Add `macos/fallback-relay/`: a loopback relay on the Mac that forwards to the phone over USB and falls back to Wi-Fi, blocking traffic when neither path passes an HTTPS health check.
+
 ## 2026-11-16 — signature renewal script
 
 - Add `macos/Renovar MyProxy.command`: rebuilds, verifies the new signature, installs and opens the app on a USB-connected iPhone, then checks the USB proxy. Device identifiers are read from the environment or `~/.config/myproxy/renew.env`.
